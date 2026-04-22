@@ -19,7 +19,7 @@ I built the entire feature end to end across all three layers
 - Backend:
   - PHP (custom "Still" framework), token-based auth
 - Database:
-  - MYSQL tables, stored procedures, transactions, and role-based permissions
+  - MYSQL tables, stored procedures (SPs), transactions, and role-based permissions
 - Build/Deploy:
   - Webpack (4 environment configs)
   - GitLab CI
@@ -33,3 +33,32 @@ PQCanvass needed a way to distribute promotional credits to prospective or exist
 - Track redemptions for auditing, statistics, and to prevent double-use
 - Support expiration dates on codes
 - Send internal alerts when codes are redeemed
+
+## Solution
+Database: 
+- merlin_coins table wiht GUID, credit_amount, used flag, date_used, exipration_date, and foreign keys to transaction/account/user
+- `sp_redeem_merlin_coin`: atomic procedure that validates the coin, creates a transaction record, adds it as a line item, finalizes the transaction, credits the wallet, and marks the coin used. Returns a structured result with success/failure reason codes.
+- 3 supporting read procedures for lookkup, existence, and status checks
+- Role based permissions for reads and writes
+
+Backend (single endpoint):
+- POST /merlincoin/redeem/:guid with middleware chain: auth → content type → input validation → user loading
+- Verifies user has access to the target account before calling the SP
+- Maps SP failure reasons to HTTP status codes
+- Sends CoinRedemptionAlertEmail on success (non-blocking)
+- Structured logging at every decision point
+
+Frontend (3-step flow):
+1. LoginStep: Email/password form with HTML5 validation → calls POST /auth/sign-in → extracts credentials from response headers
+2. AccountSelectStep: Radio button list of user's accounts (filters out demo account IDs) → dispatches redeem thunk → calls POST /merlincoin/redeem/:guid
+3. SuccessStep: Shows credits awarded → calls POST /auth/accounts/:id/select → populates sessionStorage with credentials in PQCanvass format → redirects to PQCanvass URL
+
+If the user only has one account, step 2 is skipped entirely. URL parameter ?redeem= carries the code/GUID, ?source= for marketing department
+
+## Challeneges
+This was my first ever full stack project, so most of my time was spent learning as I went. I have no doubt it could be done better or cleaner, but I view it as a valuable learning experience that left me with a better understanding of full stack web development. Because of this, every step of the way felt like a new challenge. There weren't any steps that stood out as being particularly challenging, outside of figuring out what and why I was doing.
+
+## Lessons Learned
+- Moving validation from PHP to the stored procedure made redemption atomic and eliminated race conditions
+- How to propagate error codes from the database through to the frontend, translated into meaningful error messages
+- Building all three layers gave me end to end visibility into how a request flows from URL parameter to database transaction to UI confirmation.
