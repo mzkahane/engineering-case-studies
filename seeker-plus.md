@@ -89,3 +89,18 @@ flowchart TB
     COLOR --> PLOT[Plotly heatmap layers, stacked]
 ```
 
+**Color scale choice.** The voltage magnitudes displayed on this heatmap from V to mV. A linear color scale rendered everything except for the fundamental as the same color. I normalized this by computing each cell's value as `log10(cell_voltage / fundamental_voltage`, which gave a perceptually useful range and let the fundamental sit at 0 as a natural reference.
+
+**Null handling.** Since the real data coming in can have gaps, Plotly heatmaps treat `NaN` cells as transparent and `hoveronaps: false` hid the mouse hover popup on those gaps. 
+
+### Data chunking and down-binning
+
+Even when a full 740 band request didn't hit the daemon's memory ceiling, it would take a very long time to load (5 seconds or more end-to-end). The solution to this was to split each layer's request into N chunks by bin range (y-axis) and send the requests in parallel. This cut the load times nearly in half, but of course, I wanted to go faster. The backend exposed an interesting parameter that I was able to take advantage of called `cthresh`, which would allow me to specify how many points I wanted to get back. I combined this with Plotly's tracking of the graph's width to tell the server how far to down-bin the data so that I got back roughly the same number of `[min, max]` traces as there were pixels on the x-axis. This bounded the response size to no more than what the screen can actually display. That meant a 1000-pixel-wide plot fetches about 1000 pairs per bin regardless of whether the recording was 5 minutes or 5 days long.
+
+Two browser-side feedback loops keep `cthresh` honest:
+- A `ResizeObserver` refetches when the plots's pixel width changes (resized browser window)
+- a `relayout` handler refetches when the user zooms (narrower time range = denser data per pixel)
+
+Both feedback loops are debounced (400ms) so that rapid resizing or zooming doesn't fire N requests per frame.
+
+**Picking N (the chunk count).** Conceptually, more chunks = smaller per-request payloads = better parallelism. In practice, the 6-connection cap with HTTP/1.1 and per-request overhead in the daemon set an efficiency floor. To find the optimal balance of chunk-size and number of chunks, I built a temporary in-app benchmark utility that would capture a consistent zoom range and allow me to re-run the requests with different chunk counts and log the wall clock time, and chunk size for each. Across 15 chunk counts for 2 different zoom levels, the wall-clock time formed a noisy U-curve with fast improvement from 1 to 3 chunks, then a plateau, with 7 chunks marginally best on the combined median. Admitedly, my testing could have been more thorough, but 7 chunks gave acceptable load times, and changing it in the future is as easy as editing a constant at the top of the file. 
