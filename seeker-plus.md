@@ -103,4 +103,14 @@ Two browser-side feedback loops keep `cthresh` honest:
 
 Both feedback loops are debounced (400ms) so that rapid resizing or zooming doesn't fire N requests per frame.
 
-**Picking N (the chunk count).** Conceptually, more chunks = smaller per-request payloads = better parallelism. In practice, the 6-connection cap with HTTP/1.1 and per-request overhead in the daemon set an efficiency floor. To find the optimal balance of chunk-size and number of chunks, I built a temporary in-app benchmark utility that would capture a consistent zoom range and allow me to re-run the requests with different chunk counts and log the wall clock time, and chunk size for each. Across 15 chunk counts for 2 different zoom levels, the wall-clock time formed a noisy U-curve with fast improvement from 1 to 3 chunks, then a plateau, with 7 chunks marginally best on the combined median. Admitedly, my testing could have been more thorough, but 7 chunks gave acceptable load times, and changing it in the future is as easy as editing a constant at the top of the file. 
+**Picking N (the chunk count).** Conceptually, more chunks = smaller per-request payloads = better parallelism. In practice, the 6-connection cap with HTTP/1.1 and per-request overhead in the daemon set an efficiency floor. To find the optimal balance of chunk-size and number of chunks, I built a temporary in-app benchmark utility that would capture a consistent zoom range and allow me to re-run the requests with different chunk counts and log the wall clock time, and chunk size for each. 
+
+Across 15 chunk counts for 2 different zoom levels, the wall-clock time formed a noisy U-curve with fast improvement from 1 to 3 chunks, then a plateau, with 7 chunks marginally best on the combined median. Admitedly, my testing could have been more thorough, but 7 chunks gave acceptable load times, and changing it in the future is as easy as editing a constant at the top of the file. 
+
+### Skipping unnecessary middle-tier steps
+
+inspecting the flame chart revealed that each chunk spent about 500ms in the PHP calling json_decode and json_encode. Looking into it, I saw that the function called between the encode and decode silently no-op'd for harmonics data. the JSON bytes were being decoded and encoded for no reason at all. 
+
+My solution was to bypass that logic with a new `sendRaw` daemn call that reads the daemon's response bytes, locates the data portion buy string markers, and forwards the substring directly to the frontend without parsing. This reuses the framework's existing "skip formatting" hook so the PHP doesn't re-encode. This new call is only used for harmonic-shaped data, the existing calls still went through the standard path.
+
+**Fragility cost:** the issue with this is that the slicing assumes that the daemon emits JSON with default whitespace. If it switches to compact JSON, then slicing would break. This was noted in the regression test list, and comments were left on both sides stating this.
